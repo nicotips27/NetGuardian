@@ -34,6 +34,7 @@
     <!-- Recursos embebidos dentro del .exe (logo e icono y fuente Orbitron) -->
     <EmbeddedResource Include="Resources\logo.png" />
     <EmbeddedResource Include="Resources\Orbitron.ttf" />
+    <EmbeddedResource Include="Resources\app.ico" />
   </ItemGroup>
 
   <ItemGroup>

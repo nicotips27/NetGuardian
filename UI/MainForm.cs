@@ -29,9 +29,14 @@ public class MainForm : Form
     public MainForm()
     {
         Text = "NETGUARDIAN // Estalingrado Corp";
-        Icon = Icon.ExtractAssociatedIcon(
-            Path.Combine(AppContext.BaseDirectory, "NetGuardian.exe"))
-            ?? SystemIcons.Application;
+        // Icono siempre embebido: nunca depender de archivos externos
+        try
+        {
+            using var s = typeof(MainForm).Assembly
+                .GetManifestResourceStream("NetGuardian.Resources.app.ico");
+            if (s != null) Icon = new Icon(s);
+        }
+        catch { /* icono por defecto */ }
         Width = 1180; Height = 720;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Theme.BgBlack;
