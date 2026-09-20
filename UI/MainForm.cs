@@ -5,25 +5,20 @@ using NetGuardian.Utils;
 namespace NetGuardian.UI;
 
 /// <summary>
-/// Ventana principal: tabla de dispositivos, barra de acciones
-/// (escanear, vigilar, bloquear/desbloquear, limitar) y log.
-/// Tema oscuro negro/azul.
+/// Ventana principal. Estetica corporativa estilo Militech adaptada a
+/// negro/azul minimalista: cabecera angular con logo, chips de estado,
+/// tabla oscura con cabeceras azul neon y consola de log.
 /// </summary>
 public class MainForm : Form
 {
-    // ---- Paleta de colores del tema ----
-    private static readonly Color BgMain     = Color.FromArgb(13, 15, 20);   // fondo casi negro
-    private static readonly Color BgPanel    = Color.FromArgb(20, 24, 33);   // paneles
-    private static readonly Color BlueAccent = Color.FromArgb(0, 120, 215);  // azul principal
-    private static readonly Color BlueLight  = Color.FromArgb(62, 160, 255); // azul claro
-    private static readonly Color TextMain   = Color.FromArgb(220, 230, 245);
-    private static readonly Color TextDim    = Color.FromArgb(130, 145, 170);
-
     private DataGridView _grid = null!;
     private TextBox _logBox = null!;
     private Label _status = null!;
+    private Label _clock = null!;
+    private Label _countersLabel = null!;
     private BindingSource _gridSource = new();
     private ProgressBar _progress = null!;
+    private System.Windows.Forms.Timer _clockTimer = null!;
 
     private NetworkScanner _scanner = null!;
     private ArpSpoofer _spoofer = null!;
@@ -33,11 +28,14 @@ public class MainForm : Form
 
     public MainForm()
     {
-        Text = "NetGuardian - Administrador de red local (SOLO USO AUTORIZADO)";
-        Width = 1050; Height = 680;
+        Text = "NETGUARDIAN // Estalingrado Corp";
+        Icon = Icon.ExtractAssociatedIcon(
+            Path.Combine(AppContext.BaseDirectory, "NetGuardian.exe"))
+            ?? SystemIcons.Application;
+        Width = 1180; Height = 720;
         StartPosition = FormStartPosition.CenterScreen;
-        BackColor = BgMain;
-        ForeColor = TextMain;
+        BackColor = Theme.BgBlack;
+        ForeColor = Theme.TextMain;
         BuildUi();
         Logger.OnLog += line =>
         {
@@ -47,49 +45,81 @@ public class MainForm : Form
 
     // ---------- Construccion de la interfaz ----------
 
-    private static Button MakeButton(string text, int width, Color back)
-    {
-        var b = new Button
-        {
-            Text = text, Width = width, Height = 32,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = back, ForeColor = Color.White,
-            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-            Margin = new Padding(6, 6, 0, 0),
-            Cursor = Cursors.Hand
-        };
-        b.FlatAppearance.BorderSize = 0;
-        b.FlatAppearance.MouseOverBackColor = BlueLight;
-        return b;
-    }
-
     private void BuildUi()
     {
-        // Aviso etico en la parte superior
+        // === Cabecera tipo HUD (pintada a mano: logo + titulo + reloj) ===
+        var header = new Panel { Dock = DockStyle.Top, Height = 84, BackColor = Theme.BgBlack };
+        header.Paint += (_, e) =>
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+            // Linea inferior azul del header con esquina doblada
+            Theme.DrawAngularRect(g, new Rectangle(4, 2, header.Width - 8, header.Height - 6),
+                16, Theme.BlueDark, Theme.BgPanel, 1);
+        };
+        var logo = new PictureBox
+        {
+            Image = Theme.GetLogo(), SizeMode = PictureBoxSizeMode.Zoom,
+            Left = 18, Top = 12, Width = 58, Height = 58,
+            BackColor = Color.Transparent
+        };
+        var title = new Label
+        {
+            Text = "NETGUARDIAN", AutoSize = true,
+            Font = Theme.DisplayFont(17f),
+            ForeColor = Theme.Blue, Left = 88, Top = 14,
+            BackColor = Theme.BgPanel
+        };
+        var sub = new Label
+        {
+            Text = "ESTALINGRADO CORP  //  NETWORK AUTHORITY UNIT",
+            AutoSize = true, Font = Theme.DisplayFont(7.5f),
+            ForeColor = Theme.TextDim, Left = 90, Top = 50,
+            BackColor = Theme.BgPanel
+        };
+        _clock = new Label
+        {
+            AutoSize = true, Font = Theme.DisplayFont(9f),
+            ForeColor = Theme.BlueDim, BackColor = Theme.BgPanel,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right
+        };
+        header.Resize += (_, _) =>
+            _clock.Left = header.Width - _clock.Width - 30;
+        _clock.Top = 30;
+        header.Controls.AddRange(new Control[] { logo, title, sub, _clock });
+
+        // Reloj
+        _clockTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        _clockTimer.Tick += (_, _) =>
+            _clock.Text = DateTime.Now.ToString("HH:mm:ss") + "  LOCAL";
+        _clockTimer.Start();
+
+        // === Aviso etico ===
         var warning = new Label
         {
-            Dock = DockStyle.Top, Height = 36,
+            Dock = DockStyle.Top, Height = 26,
             TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = Color.Black,
-            BackColor = BlueLight,
-            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-            Text = "USO ETICO: esta herramienta solo debe usarse en redes propias o con autorizacion expresa del propietario de la red."
+            ForeColor = Theme.BgBlack, BackColor = Theme.Blue,
+            Font = Theme.DisplayFont(8f),
+            Text = "SOLO REDES PROPIAS O CON AUTORIZACION EXPRESA DEL PROPIETARIO"
         };
 
-        // Barra de botones
+        // === Barra de acciones ===
         var panel = new FlowLayoutPanel
         {
-            Dock = DockStyle.Top, Height = 46,
-            Padding = new Padding(8), BackColor = BgPanel
+            Dock = DockStyle.Top, Height = 50,
+            Padding = new Padding(8), BackColor = Theme.BgBlack,
+            WrapContents = false, AutoScroll = true
         };
 
-        var btnScan    = MakeButton("Escanear red", 130, BlueAccent);
-        var btnWatch   = MakeButton("Vigilar trafico", 150, Color.FromArgb(30, 90, 160));
-        var btnUnwatch = MakeButton("Dejar de vigilar", 150, Color.FromArgb(30, 90, 160));
-        var btnBlock   = MakeButton("Bloquear", 110, Color.FromArgb(160, 30, 40));
-        var btnUnblock = MakeButton("Desbloquear", 120, Color.FromArgb(0, 130, 90));
-        var btnLimit   = MakeButton("Limitar velocidad...", 165, Color.FromArgb(60, 60, 120));
-        var btnRemLim  = MakeButton("Quitar limite", 130, Color.FromArgb(60, 60, 120));
+        var btnScan    = Theme.HudButton("Escanear red", 140, Theme.Blue);
+        var btnWatch   = Theme.HudButton("Vigilar trafico", 160, Theme.BlueDim);
+        var btnUnwatch = Theme.HudButton("Dejar vigilar", 140, Theme.BlueDim);
+        var btnBlock   = Theme.HudButton("Bloquear", 120, Theme.Red);
+        var btnUnblock = Theme.HudButton("Desbloquear", 130, Theme.Green);
+        var btnLimit   = Theme.HudButton("Limitar velocidad", 175, Theme.Amber);
+        var btnRemLim  = Theme.HudButton("Quitar limite", 135, Theme.Amber);
 
         btnScan.Click    += async (_, _) => await ScanAsync();
         btnWatch.Click   += (_, _) => WatchSelected(true);
@@ -101,9 +131,41 @@ public class MainForm : Form
         panel.Controls.AddRange(new Control[]
             { btnScan, btnWatch, btnUnwatch, btnBlock, btnUnblock, btnLimit, btnRemLim });
 
-        _progress = new ProgressBar { Dock = DockStyle.Bottom, Height = 5 };
+        _progress = new ProgressBar { Dock = DockStyle.Bottom, Height = 4 };
 
-        // Tabla de dispositivos (tema oscuro)
+        // === Consola de log ===
+        _logBox = new TextBox
+        {
+            Dock = DockStyle.Bottom, Height = 135,
+            Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
+            Font = new Font("Consolas", 9f),
+            BackColor = Color.FromArgb(5, 7, 9),
+            ForeColor = Theme.BlueDim,
+            BorderStyle = BorderStyle.None
+        };
+
+        // === Barra de estado con contadores ===
+        var statusBar = new Panel { Dock = DockStyle.Bottom, Height = 30, BackColor = Theme.BgPanel };
+        _status = new Label
+        {
+            Dock = DockStyle.Left, AutoSize = false, Width = 700,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(10, 0, 0, 0),
+            ForeColor = Theme.TextDim,
+            Font = new Font("Consolas", 8.5f), BackColor = Theme.BgPanel
+        };
+        _countersLabel = new Label
+        {
+            Dock = DockStyle.Right, AutoSize = false, Width = 380,
+            TextAlign = ContentAlignment.MiddleRight,
+            Padding = new Padding(0, 0, 12, 0),
+            ForeColor = Theme.Blue,
+            Font = new Font("Consolas", 8.5f), BackColor = Theme.BgPanel
+        };
+        statusBar.Controls.Add(_status);
+        statusBar.Controls.Add(_countersLabel);
+
+        // === Tabla (tema oscuro, cabeceras azul neon) ===
         _grid = new DataGridView
         {
             Dock = DockStyle.Fill,
@@ -111,72 +173,71 @@ public class MainForm : Form
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
             ReadOnly = true,
             AllowUserToAddRows = false,
-            BackgroundColor = BgMain,
-            GridColor = Color.FromArgb(35, 42, 58),
+            BackgroundColor = Theme.BgBlack,
+            GridColor = Theme.BlueDark,
             BorderStyle = BorderStyle.None,
             EnableHeadersVisualStyles = false,
             RowHeadersVisible = false,
+            ColumnHeadersHeight = 34,
+            RowTemplate = { Height = 26 },
             DefaultCellStyle = new DataGridViewCellStyle
             {
-                BackColor = BgPanel, ForeColor = TextMain,
-                SelectionBackColor = BlueAccent, SelectionForeColor = Color.White,
-                Font = new Font("Segoe UI", 9.5f)
+                BackColor = Theme.BgPanel, ForeColor = Theme.TextMain,
+                SelectionBackColor = Theme.BlueDark,
+                SelectionForeColor = Color.White,
+                Font = new Font("Consolas", 9.5f)
             },
             AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle
             {
-                BackColor = BgMain, ForeColor = TextMain,
-                SelectionBackColor = BlueAccent, SelectionForeColor = Color.White
+                BackColor = Theme.BgBlack, ForeColor = Theme.TextMain,
+                SelectionBackColor = Theme.BlueDark,
+                SelectionForeColor = Color.White
             },
             ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
             {
-                BackColor = Color.FromArgb(10, 20, 40), ForeColor = BlueLight,
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                BackColor = Theme.Blue, ForeColor = Theme.BgBlack,
+                Font = Theme.DisplayFont(8.5f),
                 Alignment = DataGridViewContentAlignment.MiddleLeft
             }
         };
         _grid.Columns.Add(new DataGridViewTextBoxColumn
-        { HeaderText = "IP", DataPropertyName = "Ip", Width = 130 });
+        { HeaderText = "IP", DataPropertyName = "Ip", Width = 125 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
-        { HeaderText = "MAC", DataPropertyName = "MacString", Width = 140 });
+        { HeaderText = "MAC", DataPropertyName = "MacString", Width = 135 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
-        { HeaderText = "Fabricante", DataPropertyName = "Vendor", Width = 130 });
+        { HeaderText = "FABRICANTE", DataPropertyName = "Vendor", Width = 125 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
-        { HeaderText = "Nombre", DataPropertyName = "HostName", Width = 140 });
+        { HeaderText = "NOMBRE", DataPropertyName = "HostName", Width = 135 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
-        { HeaderText = "SO (estimado)", DataPropertyName = "OsGuess", Width = 160 });
+        { HeaderText = "SO (EST.)", DataPropertyName = "OsGuess", Width = 150 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
-        { HeaderText = "Descarga (KB/s)", DataPropertyName = "DownloadKbps", Width = 120 });
+        { HeaderText = "BAJADA KB/S", DataPropertyName = "DownloadKbps", Width = 110 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
-        { HeaderText = "Subida (KB/s)", DataPropertyName = "UploadKbps", Width = 110 });
+        { HeaderText = "SUBIDA KB/S", DataPropertyName = "UploadKbps", Width = 110 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
-        { HeaderText = "Estado", DataPropertyName = "StateText", Width = 200 });
+        { HeaderText = "ESTADO", DataPropertyName = "StateText", Width = 170 });
         _grid.DataSource = _gridSource;
 
-        // Log
-        _logBox = new TextBox
+        // Chips de color segun estado (rojo bloqueado / azul vigilado / verde normal)
+        _grid.CellFormatting += (_, e) =>
         {
-            Dock = DockStyle.Bottom, Height = 130,
-            Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
-            Font = new Font("Consolas", 9f),
-            BackColor = Color.FromArgb(8, 10, 14),
-            ForeColor = Color.FromArgb(80, 180, 255),
-            BorderStyle = BorderStyle.None
-        };
-
-        _status = new Label
-        {
-            Dock = DockStyle.Bottom, Height = 24,
-            Padding = new Padding(8, 4, 0, 0),
-            BackColor = BgPanel, ForeColor = TextDim,
-            Font = new Font("Segoe UI", 9f)
+            if (e.ColumnIndex == _grid.Columns.Count - 1 && e.Value is string s)
+            {
+                e.CellStyle!.ForeColor =
+                    s.Contains("BLOQUEADO") ? Theme.Red :
+                    s.Contains("Vigilado") ? Theme.Blue :
+                    s.Contains("Limitado") ? Theme.Amber : Theme.Green;
+                e.CellStyle.Font = new Font("Consolas", 9.5f, FontStyle.Bold);
+            }
         };
 
         Controls.Add(_grid);
         Controls.Add(_logBox);
-        Controls.Add(_status);
+        Controls.Add(statusBar);
         Controls.Add(_progress);
         Controls.Add(panel);
         Controls.Add(warning);
+        Controls.Add(header);
     }
 
     // ---------- Inicializacion de servicios ----------
@@ -207,7 +268,7 @@ public class MainForm : Form
             _limiter = new BandwidthLimiter(_spoofer);
             _monitor.StatsUpdated += OnStats;
 
-            _status.Text = $"IP local: {localIp} | Gateway: {gateway} | Interfaz: {device.Description}";
+            _status.Text = $"IP LOCAL {localIp}  |  GATEWAY {gateway}  |  {device.Description}";
             Logger.Log($"Inicializado. IP={localIp}, Gateway={gateway}, GatewayMAC={gwMac}");
         }
         catch (Exception ex)
@@ -222,7 +283,7 @@ public class MainForm : Form
 
     private async Task ScanAsync()
     {
-        _status.Text = "Escaneando red...";
+        _status.Text = "ESCANEANDO LA RED...";
         _progress.Value = 0;
         var progress = new Progress<int>(p => _progress.Value = p);
         var found = await _scanner.ScanAsync(progress);
@@ -244,13 +305,9 @@ public class MainForm : Form
             }
         }
         RefreshGrid();
-        _status.Text = $"Escaneo completado: {found.Count} dispositivos.";
+        _status.Text = $"ESCANEO COMPLETADO: {found.Count} DISPOSITIVOS";
     }
 
-    /// <summary>
-    /// Activa el modo vigilancia (MITM) sobre el dispositivo: su trafico pasa
-    /// por nosotros (lo reenviamos) y por eso podemos medir bajada y subida.
-    /// </summary>
     private void WatchSelected(bool watch)
     {
         var d = SelectedDevice(); if (d == null) return;
@@ -277,7 +334,7 @@ public class MainForm : Form
         }
         else
         {
-            _limiter.RemoveLimit(d);   // asegura parar tambien el limitador
+            _limiter.RemoveLimit(d);
             _spoofer.UnblockDevice(d);
             Logger.LogDevice(d, "Desbloqueado (ARP restaurado)");
         }
@@ -290,23 +347,27 @@ public class MainForm : Form
 
         var dlg = new Form
         {
-            Text = "Limite de ancho de banda",
-            Width = 340, Height = 160,
+            Text = "LIMITE DE ANCHO DE BANDA",
+            Width = 360, Height = 170,
             FormBorderStyle = FormBorderStyle.FixedDialog,
             StartPosition = FormStartPosition.CenterParent,
-            BackColor = BgPanel, ForeColor = TextMain
+            BackColor = Theme.BgBlack, ForeColor = Theme.TextMain
         };
         var num = new NumericUpDown
         {
-            Left = 15, Top = 30, Width = 280, Minimum = 1, Maximum = 100000,
+            Left = 20, Top = 32, Width = 300, Minimum = 1, Maximum = 100000,
             Value = Math.Max(1, d.LimitKbps),
-            BackColor = BgMain, ForeColor = TextMain, BorderStyle = BorderStyle.FixedSingle
+            BackColor = Theme.BgPanel, ForeColor = Theme.TextMain,
+            BorderStyle = BorderStyle.FixedSingle,
+            Font = new Font("Consolas", 10f)
         };
-        var ok = MakeButton("Aplicar", 280, BlueAccent);
-        ok.Top = 65; ok.Left = 15; ok.DialogResult = DialogResult.OK;
+        var ok = Theme.HudButton("APLICAR", 300, Theme.Blue);
+        ok.Top = 70; ok.Left = 20; ok.DialogResult = DialogResult.OK;
         dlg.Controls.AddRange(new Control[]
         {
-            new Label { Left = 15, Top = 8, Text = "KB/s aproximados:", Width = 280, ForeColor = TextMain },
+            new Label { Left = 20, Top = 10, Text = "KB/s APROXIMADOS:",
+                        Width = 300, ForeColor = Theme.BlueDim,
+                        Font = Theme.DisplayFont(8f) },
             num, ok
         });
         dlg.AcceptButton = ok;
@@ -345,7 +406,6 @@ public class MainForm : Form
         BeginInvoke(RefreshGrid);
     }
 
-    // Proyeccion plana para la tabla
     private record DeviceRow(string Ip, string MacString, string Vendor,
         string HostName, string OsGuess, double DownloadKbps,
         double UploadKbps, string StateText);
@@ -355,10 +415,10 @@ public class MainForm : Form
         var rows = _devices.Values.Select(d =>
         {
             bool watching = _spoofer?.IsWatching(d) == true;
-            string estado = d.IsBlocked ? "BLOQUEADO"
-                : d.LimitKbps > 0 ? $"Limitado ~{d.LimitKbps} KB/s"
-                : watching ? "Vigilado (medicion activa)"
-                : "Normal";
+            string estado = d.IsBlocked ? "[X] BLOQUEADO"
+                : d.LimitKbps > 0 ? $"[~] LIMITADO {d.LimitKbps} KB/S"
+                : watching ? "[O] VIGILADO"
+                : "[ ] NORMAL";
             return new DeviceRow(d.Ip.ToString(), d.MacString, d.Vendor,
                 d.HostName, d.OsGuess, d.DownloadKbps, d.UploadKbps, estado);
         }).ToList();
@@ -366,13 +426,20 @@ public class MainForm : Form
         int firstVisible = _grid.FirstDisplayedScrollingRowIndex >= 0
             ? _grid.FirstDisplayedScrollingRowIndex : 0;
         _gridSource.DataSource = rows;
-        if (firstVisible < rows.Count)
+        if (firstVisible < rows.Count && firstVisible >= 0)
             _grid.FirstDisplayedScrollingRowIndex = firstVisible;
+
+        // Contadores de estado en la barra inferior
+        int blocked = _devices.Values.Count(d => d.IsBlocked);
+        int limited = _devices.Values.Count(d => d.LimitKbps > 0);
+        int watched = _devices.Values.Count(d => _spoofer?.IsWatching(d) == true);
+        _countersLabel.Text =
+            $"NODES:{_devices.Count}  BLOCKED:{blocked}  WATCH:{watched}  LIMITED:{limited}";
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        // Limpieza: restaurar ARP de todo lo afectado antes de salir.
+        // Restaurar ARP de todo lo afectado antes de salir (null-safe)
         foreach (var d in _devices.Values)
         {
             try { _spoofer?.UnblockDevice(d); } catch { }
@@ -380,6 +447,7 @@ public class MainForm : Form
         try { _limiter?.Dispose(); } catch { }
         try { _monitor?.Dispose(); } catch { }
         try { _spoofer?.Dispose(); } catch { }
+        _clockTimer?.Dispose();
         base.OnFormClosing(e);
     }
 }

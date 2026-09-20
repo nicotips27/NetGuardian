@@ -17,8 +17,8 @@
     <AssemblyName>NetGuardian</AssemblyName>
     <!-- Manifiesto que exige privilegios de administrador -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- Icono opcional -->
-    <!-- <ApplicationIcon>app.ico</ApplicationIcon> -->
+    <!-- Icono del ejecutable (Resources/app.ico) -->
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <!-- Configuracion de publicacion: ejecutable unico y portable -->
@@ -29,6 +29,12 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Recursos embebidos dentro del .exe (logo e icono y fuente Orbitron) -->
+    <EmbeddedResource Include="Resources\logo.png" />
+    <EmbeddedResource Include="Resources\Orbitron.ttf" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Captura de paquetes (requiere Npcap instalado en el sistema) -->
