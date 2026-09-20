@@ -18,7 +18,7 @@ publica solo con fines educativos y de administracion de redes propias.
 |---|---|
 | Escaneo de red | Ping sweep /24 + tabla ARP: IP, MAC, fabricante, nombre, SO |
 | Fabricante (OUI) | Base embebida de ~200 fabricantes (+ deteccion de MAC privada/aleatoria) |
-| Nombre real | NetBIOS (UDP 137) para Windows, mDNS (224.0.0.251:5353) para Apple/Android/IoT, DNS inverso como reserva |
+| Nombre real | NetBIOS (UDP 137) para Windows, mDNS (multicast 224.0.0.251:5353) y Zeroconf/DNS-SD para resolucion de nombres .local (iPhone, Mac, Linux, printers), con DNS inverso como reserva |
 | SO estimado | Huella TTL refinada con fabricante y NetBIOS |
 | Vigilancia (MITM) | Enruta el trafico de la victima por esta maquina (con reenvio) para medir bajada y subida reales |
 | Bloqueo | ARP spoofing: el trafico de la victima se redirige aqui y se descarta |
@@ -91,6 +91,9 @@ PC Windows x64 con Npcap y ejecutalo como administrador.
 - **NetBIOS Node Status** (UDP 137): nombre real de los equipos Windows.
 - **mDNS** (multicast 224.0.0.251:5353, consulta PTR de
   `_services._dns-sd._udp.local`): nombres de iPhone, Mac, Chromecast, IoT.
+- **Zeroconf** (paquete NuGet): ahora depende de la librería SharpZeroconf para
+  descubrimiento DNS-Based Service Discovery. Complementa al mDNS y usa los
+  mismos protocolos .local, pero con una API administrada mas sencilla.
 - **OUI**: los 3 primeros bytes de la MAC identifican al fabricante; tambien
   se detectan MACs aleatorias (bit U/L) tipicas de Android/iOS modernos.
 - **TTL de las respuestas**: 64 = Linux/Android/iOS, 128 = Windows,

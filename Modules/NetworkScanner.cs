@@ -41,8 +41,7 @@ public class NetworkScanner
         using var sem = new SemaphoreSlim(concurrency);
         int completed = 0;
 
-        // Lanzar el descubrimiento mDNS en paralelo (una consulta multicast
-        // llega a todos los dispositivos; escuchamos ~2,5 s).
+        // Descubrimiento mDNS (multicast): nombres de Apple, Android e IoT.
         var mdnsTask = DiscoverMdnsAsync(ct);
 
         var tasks = Enumerable.Range(1, 254).Select(async i =>

@@ -2,6 +2,8 @@ using NetGuardian.Models;
 using NetGuardian.Modules;
 using NetGuardian.Utils;
 
+using System.IO;
+using System.Text.Json;
 using System.Runtime.InteropServices;
 
 namespace NetGuardian.UI;
@@ -495,6 +497,16 @@ public class MainForm : Form
         try { _monitor?.Dispose(); } catch { }
         try { _spoofer?.Dispose(); } catch { }
         _clockTimer?.Dispose();
+        // Guardar lista de IPs de dispositivos para que persistan entre sesiones
+        try
+        {
+            string path = Path.Combine(Application.StartupPath, "devices.txt");
+            var ips = new List<string>();
+            foreach (var key in _devices.Keys)
+                ips.Add(key);
+            File.WriteAllLines(path, ips);
+        }
+        catch { }
         base.OnFormClosing(e);
     }
 }
