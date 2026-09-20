@@ -33,6 +33,12 @@ public class NetworkDevice
     public double UploadKbps { get; set; }
     public DateTime LastSeen { get; set; } = DateTime.Now;
 
+    /// <summary>
+    /// Escaneos consecutivos en los que NO respondio. Se usa para marcar
+    /// el dispositivo como offline y purgarlo de la lista.
+    /// </summary>
+    public int MissedScans { get; set; }
+
     public string MacString => string.Join(":", Mac.GetAddressBytes()
         .Select(b => b.ToString("X2")));
 

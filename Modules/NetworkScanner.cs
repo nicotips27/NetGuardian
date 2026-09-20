@@ -55,10 +55,12 @@ public class NetworkScanner
             {
                 using var ping = new Ping();
                 var reply = await ping.SendPingAsync(ip, 200);
-                if (reply.Status == IPStatus.Success)
+                // Fallback: algunos dispositivos (moviles) bloquean ICMP,
+                // pero la tabla ARP puede tener su entrada igualmente
+                bool alive = reply.Status == IPStatus.Success;
+                var mac = GetMacFromArpTable(ip);
+                if ((alive || mac != null) && mac != null)
                 {
-                    var mac = GetMacFromArpTable(ip);
-                    if (mac != null)
                     {
                         var device = new NetworkDevice
                         {

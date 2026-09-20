@@ -232,8 +232,9 @@ public class MainForm : Form
             {
                 e.CellStyle!.ForeColor =
                     s.Contains("BLOQUEADO") ? Theme.Red :
-                    s.Contains("Vigilado") ? Theme.Blue :
-                    s.Contains("Limitado") ? Theme.Amber : Theme.Green;
+                    s.Contains("OFFLINE") ? Theme.TextDim :
+                    s.Contains("VIGILADO") ? Theme.Blue :
+                    s.Contains("LIMITADO") ? Theme.Amber : Theme.Green;
                 e.CellStyle.Font = new Font("Consolas", 9.5f, FontStyle.Bold);
             }
         };
@@ -318,6 +319,9 @@ public class MainForm : Form
         var progress = new Progress<int>(p => _progress.Value = p);
         var found = await _scanner.ScanAsync(progress);
 
+        var foundIps = new HashSet<string>(found.Select(d => d.Ip.ToString()));
+
+        // Los que SI respondieron: resetear contador de ausencias
         foreach (var d in found)
         {
             if (_devices.TryAdd(d.Ip.ToString(), d))
@@ -332,10 +336,27 @@ public class MainForm : Form
                 existing.OsGuess = d.OsGuess;
                 existing.Vendor = d.Vendor;
                 existing.LastSeen = DateTime.Now;
+                existing.MissedScans = 0;
             }
         }
+
+        // Los que NO respondieron: incrementar ausencias y purgar
+        var toRemove = new List<string>();
+        foreach (var kv in _devices)
+        {
+            if (foundIps.Contains(kv.Key)) continue;
+            kv.Value.MissedScans++;
+            // Tras 2 escaneos fallidos se elimina (salvo si esta bloqueado)
+            if (kv.Value.MissedScans >= 2 && !kv.Value.IsBlocked)
+            {
+                toRemove.Add(kv.Key);
+                Logger.LogDevice(kv.Value, "Desconectado (no responde; eliminado de la lista)");
+            }
+        }
+        foreach (var ip in toRemove) _devices.Remove(ip);
+
         RefreshGrid();
-        _status.Text = $"ESCANEO COMPLETADO: {found.Count} DISPOSITIVOS";
+        _status.Text = $"ESCANEO COMPLETADO: {found.Count} DISPOSITIVOS ACTIVOS";
     }
 
     private void WatchSelected(bool watch)
@@ -446,6 +467,7 @@ public class MainForm : Form
         {
             bool watching = _spoofer?.IsWatching(d) == true;
             string estado = d.IsBlocked ? "[X] BLOQUEADO"
+                : d.MissedScans > 0 ? "[?] OFFLINE (sin respuesta)"
                 : d.LimitKbps > 0 ? $"[~] LIMITADO {d.LimitKbps} KB/S"
                 : watching ? "[O] VIGILADO"
                 : "[ ] NORMAL";
