@@ -2,6 +2,8 @@ using NetGuardian.Models;
 using NetGuardian.Modules;
 using NetGuardian.Utils;
 
+using System.Runtime.InteropServices;
+
 namespace NetGuardian.UI;
 
 /// <summary>
@@ -86,11 +88,11 @@ public class MainForm : Form
         _clock = new Label
         {
             AutoSize = true, Font = Theme.DisplayFont(9f),
-            ForeColor = Theme.BlueDim, BackColor = Theme.BgPanel,
-            Anchor = AnchorStyles.Top | AnchorStyles.Right
+            ForeColor = Theme.BlueDim, BackColor = Theme.BgPanel
         };
+        // reposicionar manualmente (sin Anchor, que se desbordaba)
         header.Resize += (_, _) =>
-            _clock.Left = header.Width - _clock.Width - 30;
+            _clock.Left = Math.Max(sub.Right + 20, header.Width - _clock.Width - 30);
         _clock.Top = 30;
         header.Controls.AddRange(new Control[] { logo, title, sub, _clock });
 
@@ -243,6 +245,29 @@ public class MainForm : Form
         Controls.Add(panel);
         Controls.Add(warning);
         Controls.Add(header);
+    }
+
+    // ---------- Barra de titulo oscura (DWM) ----------
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd,
+        int dwAttribute, ref int pvAttribute, int cbAttribute);
+
+    /// <summary>
+    /// Fuerza el modo oscuro en la barra de titulo nativa de Windows
+    /// (DWMWA_USE_IMMERSIVE_DARK_MODE = 20; require Windows 10 1809+).
+    /// </summary>
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        try
+        {
+            int dark = 1;
+            DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int));
+            // 19 es el identificador en versiones antiguas de Windows 10
+            DwmSetWindowAttribute(Handle, 19, ref dark, sizeof(int));
+        }
+        catch { /* sistemas antiguos sin soporte */ }
     }
 
     // ---------- Inicializacion de servicios ----------
