@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    NetGuardian - Herramienta de administracion de red local.
+    AVISO ETICO/LEGAL: Esta herramienta implementa ARP spoofing, que puede
+    considerarse un ataque si se usa sin autorizacion. Usela SOLO en redes
+    propias o con permiso expreso del administrador de la red.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>NetGuardian</RootNamespace>
+    <AssemblyName>NetGuardian</AssemblyName>
+    <!-- Manifiesto que exige privilegios de administrador -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Icono opcional -->
+    <!-- <ApplicationIcon>app.ico</ApplicationIcon> -->
+  </PropertyGroup>
+
+  <!-- Configuracion de publicacion: ejecutable unico y portable -->
+  <PropertyGroup>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Captura de paquetes (requiere Npcap instalado en el sistema) -->
+    <PackageReference Include="SharpPcap" Version="6.2.5" />
+    <PackageReference Include="PacketDotNet" Version="1.4.7" />
+  </ItemGroup>
+
+</Project>

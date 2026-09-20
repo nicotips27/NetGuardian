@@ -1,0 +1,13 @@
+# Compilacion .NET
+bin/
+obj/
+publish/
+
+# Visual Studio / Rider
+.vs/
+.vsidx/
+*.user
+*.suo
+
+# Log de ejecucion
+netguardian.log
