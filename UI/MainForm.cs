@@ -321,7 +321,7 @@ public class MainForm : Form
 
         var foundIps = new HashSet<string>(found.Select(d => d.Ip.ToString()));
 
-        // Los que SI respondieron: resetear contador de ausencias
+        // Los que SI respondieron: resetear contador de ausencias y actualizar datos
         foreach (var d in found)
         {
             if (_devices.TryAdd(d.Ip.ToString(), d))
@@ -335,28 +335,23 @@ public class MainForm : Form
                 existing.HostName = d.HostName;
                 existing.OsGuess = d.OsGuess;
                 existing.Vendor = d.Vendor;
+                // Solo actualizamos LastSeen si el dispositivo vuelve a responder
                 existing.LastSeen = DateTime.Now;
                 existing.MissedScans = 0;
             }
         }
 
-        // Los que NO respondieron: incrementar ausencias y purgar
-        var toRemove = new List<string>();
+        // Los que NO respondieron en este escaneo: incrementar ausencias.
+        // El dispositivo SE MANTENE en la lista; solo cambia su estado a OFFLINE.
         foreach (var kv in _devices)
         {
             if (foundIps.Contains(kv.Key)) continue;
             kv.Value.MissedScans++;
-            // Tras 2 escaneos fallidos se elimina (salvo si esta bloqueado)
-            if (kv.Value.MissedScans >= 2 && !kv.Value.IsBlocked)
-            {
-                toRemove.Add(kv.Key);
-                Logger.LogDevice(kv.Value, "Desconectado (no responde; eliminado de la lista)");
-            }
+            // No borramos nunca automáticamente; el estado se muestra en la tabla
         }
-        foreach (var ip in toRemove) _devices.Remove(ip);
 
         RefreshGrid();
-        _status.Text = $"ESCANEO COMPLETADO: {found.Count} DISPOSITIVOS ACTIVOS";
+        _status.Text = $"ESCANEO COMPLETADO: {found.Count} DISPOSITIVOS (conectados)";
     }
 
     private void WatchSelected(bool watch)
