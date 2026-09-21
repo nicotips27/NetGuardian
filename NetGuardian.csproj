@@ -39,9 +39,11 @@
 
   <ItemGroup>
     <!-- Captura de paquetes (requiere Npcap instalado en el sistema) -->
+    <PackageReference Include="Atc.Network" Version="1.0.236" />
+    <PackageReference Include="Makaretu.Dns" Version="2.0.1" />
     <PackageReference Include="SharpPcap" Version="6.2.5" />
     <PackageReference Include="PacketDotNet" Version="1.4.7" />
-    <PackageReference Include="Zeroconf" Version="3.1.0" />
+    <PackageReference Include="Zeroconf" Version="3.7.1" />
   </ItemGroup>
 
 </Project>
