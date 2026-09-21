@@ -11,3 +11,10 @@ publish/
 
 # Log de ejecucion
 netguardian.log
+netguardian_error.log
+
+# Datos locales de la red del usuario (no publicar IPs reales)
+devices.txt
+
+# Ejecutables portables (se distribuyen por Releases, no por git)
+*_portable.exe

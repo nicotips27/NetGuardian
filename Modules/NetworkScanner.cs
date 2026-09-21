@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using NetGuardian.Models;
 using NetGuardian.Utils;
+using Zeroconf;
 
 namespace NetGuardian.Modules;
 
@@ -41,8 +42,11 @@ public class NetworkScanner
         using var sem = new SemaphoreSlim(concurrency);
         int completed = 0;
 
-        // Descubrimiento mDNS (multicast): nombres de Apple, Android e IoT.
+        // Descubrimiento mDNS propio (multicast): nombres de Apple, Android e IoT.
         var mdnsTask = DiscoverMdnsAsync(ct);
+
+        // Descubrimiento Zeroconf (DNS-SD .local): paquete NuGet "Zeroconf".
+        var zeroconfTask = DiscoverZeroconfAsync(ct);
 
         var tasks = Enumerable.Range(1, 254).Select(async i =>
         {
@@ -83,24 +87,39 @@ public class NetworkScanner
         });
 
         await Task.WhenAll(tasks);
-        var mdnsNames = await mdnsTask;
+        Logger.Log($"[Scan] Ping sweep terminado: {devices.Count} dispositivos");
 
+        // Contar cuantos nombres aporta cada fuente (sin cambiar logica)
+        var mdnsNames = await mdnsTask;
+        var zeroconfNames = await zeroconfTask;
+        int zcHits = devices.Count(d => zeroconfNames.ContainsKey(d.Ip.ToString()));
+        int mdnsHits = devices.Count(d => mdnsNames.ContainsKey(d.Ip.ToString()));
+        Logger.Log($"[Scan] Nombres aplicables: Zeroconf={zcHits}, mDNS={mdnsHits}");
+
+        int nbHits = 0;
         // Fase de identificacion (nombre y SO refinado), en paralelo tambien
         var idTasks = devices.Select(async d =>
         {
             // NetBIOS: nombre real de Windows (y confirma que ES Windows)
             var nb = await QueryNetBiosNameAsync(d.Ip);
             bool netbiosOk = nb != null;
+            if (netbiosOk) Interlocked.Increment(ref nbHits);
 
-            // Prioridad del nombre: NetBIOS > mDNS > DNS inverso
-            string name = nb
-                ?? (mdnsNames.TryGetValue(d.Ip.ToString(), out var m) ? m : null)
-                ?? await ResolveHostNameAsync(d.Ip);
+            // Prioridad del nombre: Zeroconf > NetBIOS > mDNS propio > DNS inverso
+            string name =
+                  (zeroconfNames.TryGetValue(d.Ip.ToString(), out var zc) ? zc : null)
+                  ?? nb
+                  ?? (mdnsNames.TryGetValue(d.Ip.ToString(), out var m) ? m : null)
+                  ?? await ResolveHostNameAsync(d.Ip);
 
             d.HostName = name != "Desconocido" ? name : d.HostName;
             d.OsGuess = OsFingerprint.Refine(d.OsGuess, d.Vendor, netbiosOk);
         });
         await Task.WhenAll(idTasks);
+
+        int named = devices.Count(d => d.HostName != "Desconocido");
+        Logger.Log($"[Scan] Identificacion: NetBIOS={nbHits}; "
+            + $"con nombre={named}, desconocidos={devices.Count - named}");
 
         // Ordenar por ultimo octeto de la IP: simple y legible
         return devices
@@ -254,6 +273,82 @@ public class NetworkScanner
             }
         }
         return best;
+    }
+
+    // ---------- Zeroconf (DNS-SD .local): paquete NuGet "Zeroconf" ----------
+
+    /// <summary>
+    /// Descubrimiento Zeroconf/DNS-SD usando la libreria "Zeroconf" (nuget: Zeroconf).
+    /// Estrategia correcta (dos fases):
+    /// 1) BrowseDomainsAsync(): enumera los TIPOS de servicio que se anuncian
+    ///    en la red (p.ej. _workstation._tcp.local, _airplay._tcp.local...).
+    /// 2) ResolveAsync(tipos): resuelve los dispositivos concretos (hosts) que
+    ///    ofrecen esos servicios; devuelve IZeroconfHost con DisplayName (nombre
+    ///    .local) e IPAddress.
+    /// Nota: _services._dns-sd._udp.local SOLO enumera tipos, no sirve para
+    /// obtener nombres de dispositivos; por eso este metodo es el correcto.
+    /// El paquete es 100% managed (no requiere Avahi/Bonjour instalados).
+    /// Si la red bloquea el multicast UDP 5353, devuelve diccionario vacio
+    /// sin colgar la aplicacion (timeout interno y try/catch total).
+    /// </summary>
+    public static async Task<Dictionary<string, string>> DiscoverZeroconfAsync(
+        CancellationToken ct = default)
+    {
+        var found = new Dictionary<string, string>();
+        Logger.Log($"[Zero] Inicio descubrimiento {DateTime.Now:HH:mm:ss}");
+        try
+        {
+            // Encolar un timeout duro: si en 6s no hay respuesta, abandonamos.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(6));
+
+            // Fase 1: enumerar los tipos de servicio presentes en la LAN.
+            // Devuelve agrupaciones por tipo: la clave es el tipo de servicio.
+            // Nota API Zeroconf 3.x: (TimeSpan scanTime, ..., CancellationToken)
+            // BrowseDomainsAsync devuelve ILookup<string,string> (key = tipo de servicio)
+            var domains = await ZeroconfResolver.BrowseDomainsAsync(
+                TimeSpan.FromSeconds(3), cancellationToken: timeout.Token);
+            Logger.Log($"[Zero] BrowseDomainsAsync: {domains.Count} tipos: "
+                       + string.Join(", ", domains.Select(g => g.Key)));
+            if (domains.Count == 0)
+            {
+                Logger.Log("[Zero] Fin: sin dominios " + DateTime.Now.ToString("HH:mm:ss"));
+                return found;
+            }
+
+            // Fase 2: resolver los hosts que anuncian cada tipo de servicio.
+            // ResolveAsync devuelve IReadOnlyList<IZeroconfHost>.
+            var hosts = await ZeroconfResolver.ResolveAsync(
+                domains.Select(g => g.Key), TimeSpan.FromSeconds(3),
+                cancellationToken: timeout.Token);
+            Logger.Log($"[Zero] ResolveAsync: {hosts.Count} host(s)");
+
+            foreach (var host in hosts)
+            {
+                if (string.IsNullOrWhiteSpace(host.IPAddress)) continue;
+                var name = host.DisplayName;
+                if (string.IsNullOrWhiteSpace(name)) continue;
+
+                // Normalizar: quitar el sufijo ".local" para legibilidad
+                if (name.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+                    name = name[..^6];
+
+                Logger.Log($"[Zero] Host: {name} @ {host.IPAddress}");
+                if (!found.ContainsKey(host.IPAddress))
+                    found[host.IPAddress] = name;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Ya no tragamos la excepcion: la registramos con detalle.
+            Logger.Log($"[Zero] ERROR: {ex.GetType().Name}: {ex.Message}");
+        }
+        if (found.Count == 0)
+            Logger.Log("[Zero] Zeroconf no devolvio resultados. Causa probable: "
+                + "multicast UDP 5353 bloqueado (firewall/AP isolation) o ningun "
+                + "dispositivo anuncia servicios mDNS en la LAN.");
+        Logger.Log($"[Zero] Fin {DateTime.Now:HH:mm:ss} -> {found.Count} nombre(s)");
+        return found;
     }
 
     // ---------- Metodos base (tabla ARP, DNS inverso, IP local) ----------
