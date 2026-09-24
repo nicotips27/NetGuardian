@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using NetGuardian.Models;
 using NetGuardian.Utils;
+using Rssdp;
 using Zeroconf;
 
 namespace NetGuardian.Modules;
@@ -23,11 +24,67 @@ public class NetworkScanner
     private readonly IPAddress _localIp;
     private readonly string _networkPrefix; // p. ej. "192.168.1."
 
+    // Patrones que identifican adaptadores virtuales a ignorar
+    private static readonly string[] VirtualAdapters =
+        { "virtualbox", "vmware", "hyper-v", "vethernet", "wsl", "hamachi",
+          "bluetooth", "teredo", "isatap", "6to4", "tunnel", "loopback", "pseudo" };
+
     public NetworkScanner(IPAddress localIp)
     {
         _localIp = localIp;
         var parts = localIp.ToString().Split('.');
         _networkPrefix = $"{parts[0]}.{parts[1]}.{parts[2]}.";
+    }
+
+    /// <summary>
+    /// Devuelve la NetworkInterface real que tiene la IP local asignada.
+    /// Antes Zeroconf enviaba el multicast por la PRIMERA interfaz disponible,
+    /// que en este equipo es "VirtualBox Host-Only" (Up) -> multicast salia
+    /// a una red vacia y nunca llegaba ninguna respuesta -> 0 dominios.
+    /// Filtrando adaptadores virtuales y forzando la interfaz correcta,
+    /// el trafico mDNS sale por la red fisica (Intel I219-V = Ethernet real).
+    /// </summary>
+    public static NetworkInterface? GetMainNetworkInterface(IPAddress localIp)
+    {
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            bool virtualAdapter = VirtualAdapters.Any(v =>
+                ni.Description.Contains(v, StringComparison.OrdinalIgnoreCase) ||
+                ni.Name.Contains(v, StringComparison.OrdinalIgnoreCase));
+            if (virtualAdapter) continue;
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+
+            foreach (var addr in ni.GetIPProperties().UnicastAddresses)
+            {
+                if (addr.Address.Equals(localIp))
+                    return ni; // interfaz fisica con nuestra IP local
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Log de todas las interfaces y el motivo de descarte (diagnostico).</summary>
+    public static void LogNetworkInterfaces(IPAddress localIp)
+    {
+        try
+        {
+            Logger.Log("[Iface] --- Inventario de adaptadores ---");
+            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                bool isVirtual = VirtualAdapters.Any(v =>
+                    ni.Description.Contains(v, StringComparison.OrdinalIgnoreCase) ||
+                    ni.Name.Contains(v, StringComparison.OrdinalIgnoreCase));
+                var ips = ni.GetIPProperties().UnicastAddresses
+                    .Select(a => a.Address.ToString()).ToArray();
+                Logger.Log($"[Iface] {ni.Name} | {ni.Description} | {ni.OperationalStatus} | "
+                    + $"{(isVirtual ? "VIRTUAL (ignorado)" : "FISICO")} | IPs: {string.Join(",", ips)}");
+            }
+            var main = GetMainNetworkInterface(localIp);
+            Logger.Log(main != null
+                ? $"[Iface] Interfaz seleccionada para mDNS/SSDP: {main.Name} ({main.Description})"
+                : "[Iface] AVISO: no se encontro ninguna interfaz fisica con la IP local");
+        }
+        catch (Exception ex) { Logger.Log($"[Iface] ERROR: {ex.Message}"); }
     }
 
     /// <summary>
@@ -45,8 +102,15 @@ public class NetworkScanner
         // Descubrimiento mDNS propio (multicast): nombres de Apple, Android e IoT.
         var mdnsTask = DiscoverMdnsAsync(ct);
 
-        // Descubrimiento Zeroconf (DNS-SD .local): paquete NuGet "Zeroconf".
-        var zeroconfTask = DiscoverZeroconfAsync(ct);
+        // Inventario de interfaces al inicio (diagnostico)
+        LogNetworkInterfaces(_localIp);
+
+        // Descubrimiento Zeroconf (DNS-SD .local): paquete NuGet "Zeroconf",
+        // forzando la salida multicast por la interfaz fisica correcta.
+        var zeroconfTask = DiscoverZeroconfAsync(_localIp, ct);
+
+        // Descubrimiento SSDP/UPnP (respaldo de nombres: TVs, routers, Chromecast)
+        var ssdpTask = DiscoverSsdpAsync(ct);
 
         var tasks = Enumerable.Range(1, 254).Select(async i =>
         {
@@ -92,9 +156,11 @@ public class NetworkScanner
         // Contar cuantos nombres aporta cada fuente (sin cambiar logica)
         var mdnsNames = await mdnsTask;
         var zeroconfNames = await zeroconfTask;
+        var ssdpNames = await ssdpTask;
         int zcHits = devices.Count(d => zeroconfNames.ContainsKey(d.Ip.ToString()));
         int mdnsHits = devices.Count(d => mdnsNames.ContainsKey(d.Ip.ToString()));
-        Logger.Log($"[Scan] Nombres aplicables: Zeroconf={zcHits}, mDNS={mdnsHits}");
+        int ssdpHits = devices.Count(d => ssdpNames.ContainsKey(d.Ip.ToString()));
+        Logger.Log($"[Scan] Nombres aplicables: Zeroconf={zcHits}, SSDP={ssdpHits}, mDNS={mdnsHits}");
 
         int nbHits = 0;
         // Fase de identificacion (nombre y SO refinado), en paralelo tambien
@@ -105,9 +171,10 @@ public class NetworkScanner
             bool netbiosOk = nb != null;
             if (netbiosOk) Interlocked.Increment(ref nbHits);
 
-            // Prioridad del nombre: Zeroconf > NetBIOS > mDNS propio > DNS inverso
+            // Prioridad del nombre: Zeroconf > SSDP > NetBIOS > mDNS propio > DNS inverso
             string name =
                   (zeroconfNames.TryGetValue(d.Ip.ToString(), out var zc) ? zc : null)
+                  ?? (ssdpNames.TryGetValue(d.Ip.ToString(), out var ss) ? ss : null)
                   ?? nb
                   ?? (mdnsNames.TryGetValue(d.Ip.ToString(), out var m) ? m : null)
                   ?? await ResolveHostNameAsync(d.Ip);
@@ -118,14 +185,24 @@ public class NetworkScanner
         await Task.WhenAll(idTasks);
 
         int named = devices.Count(d => d.HostName != "Desconocido");
-        Logger.Log($"[Scan] Identificacion: NetBIOS={nbHits}; "
+        Logger.Log($"[Scan] Identificacion: NetBIOS consultas={NetBiosStats.enviados}, "
+            + $"respuestas={NetBiosStats.respuestas}; "
             + $"con nombre={named}, desconocidos={devices.Count - named}");
+
+        // Diagnostico: si ninguna fuente dio nombres, comprobar firewall
+        if (named == 0)
+            LogFirewallStatus();
 
         // Ordenar por ultimo octeto de la IP: simple y legible
         return devices
             .OrderBy(d => int.Parse(d.Ip.ToString().Split('.')[3]))
             .ToList();
     }
+
+    // Contadores NetBIOS para diagnostico
+    private static int _nbSent;
+    private static int _nbReplies;
+    public static (int enviados, int respuestas) NetBiosStats => (_nbSent, _nbReplies);
 
     // ---------- NetBIOS (UDP 137): nombre real de Windows ----------
 
@@ -156,10 +233,12 @@ public class NetworkScanner
 
             using var udp = new UdpClient();
             udp.Client.ReceiveTimeout = 800;
+            Interlocked.Increment(ref _nbSent);
             await udp.SendAsync(query, query.Length, new IPEndPoint(ip, 137));
 
             using var cts = new CancellationTokenSource(800);
             var result = await udp.ReceiveAsync(cts.Token);
+            Interlocked.Increment(ref _nbReplies);
             var data = result.Buffer;
             if (data.Length < 57) return null;
 
@@ -291,23 +370,35 @@ public class NetworkScanner
     /// Si la red bloquea el multicast UDP 5353, devuelve diccionario vacio
     /// sin colgar la aplicacion (timeout interno y try/catch total).
     /// </summary>
+    /// <summary>
+    /// Igual que <see cref="DiscoverZeroconfAsync(CancellationToken)"/> pero el
+    /// multicast sale unicamente por la interfaz de red fisica (que contiene la
+    /// IP local). Antes iba por "cualquier" interfaz y terminaba en VirtualBox/pseudo.
+    /// </summary>
     public static async Task<Dictionary<string, string>> DiscoverZeroconfAsync(
-        CancellationToken ct = default)
+        IPAddress localIp, CancellationToken ct = default)
     {
         var found = new Dictionary<string, string>();
         Logger.Log($"[Zero] Inicio descubrimiento {DateTime.Now:HH:mm:ss}");
         try
         {
+            // Forzar la interfaz fisica (ver GetMainNetworkInterface).
+            var ni = GetMainNetworkInterface(localIp);
+            var netIfaces = ni != null ? new[] { ni } : null;
+            Logger.Log(ni != null
+                ? $"[Zero] Usando interfaz: {ni.Name} ({ni.Description})"
+                : "[Zero] AVISO: sin interfaz especifica (todas)");
+
             // Encolar un timeout duro: si en 6s no hay respuesta, abandonamos.
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(6));
 
             // Fase 1: enumerar los tipos de servicio presentes en la LAN.
-            // Devuelve agrupaciones por tipo: la clave es el tipo de servicio.
-            // Nota API Zeroconf 3.x: (TimeSpan scanTime, ..., CancellationToken)
-            // BrowseDomainsAsync devuelve ILookup<string,string> (key = tipo de servicio)
+            // Devuelve ILookup<string,string> (key = tipo de servicio).
             var domains = await ZeroconfResolver.BrowseDomainsAsync(
-                TimeSpan.FromSeconds(3), cancellationToken: timeout.Token);
+                TimeSpan.FromSeconds(3),
+                cancellationToken: timeout.Token,
+                netInterfacesToSendRequestOn: netIfaces);
             Logger.Log($"[Zero] BrowseDomainsAsync: {domains.Count} tipos: "
                        + string.Join(", ", domains.Select(g => g.Key)));
             if (domains.Count == 0)
@@ -320,7 +411,8 @@ public class NetworkScanner
             // ResolveAsync devuelve IReadOnlyList<IZeroconfHost>.
             var hosts = await ZeroconfResolver.ResolveAsync(
                 domains.Select(g => g.Key), TimeSpan.FromSeconds(3),
-                cancellationToken: timeout.Token);
+                cancellationToken: timeout.Token,
+                netInterfacesToSendRequestOn: netIfaces);
             Logger.Log($"[Zero] ResolveAsync: {hosts.Count} host(s)");
 
             foreach (var host in hosts)
@@ -349,6 +441,102 @@ public class NetworkScanner
                 + "dispositivo anuncia servicios mDNS en la LAN.");
         Logger.Log($"[Zero] Fin {DateTime.Now:HH:mm:ss} -> {found.Count} nombre(s)");
         return found;
+    }
+
+    // ---------- SSDP/UPnP (Rssdp): TVs, routers, Chromecast, consolas ----------
+
+    /// <summary>
+    /// Descubrimiento SSDP/UPnP usando el paquete Rssdp. Manda un M-SEARCH
+    /// multicast a 239.255.255.250:1900 ("ssdp:all") y escucha las respuestas
+    /// buscando el valor de SERVER (cabecera), suele contener fabricante/OS.
+    /// Retorna IP -> nombre anunciado. Si el multicast esta bloqueado o no
+    /// hay dispositivos UPnP, devuelve diccionario vacio sin colgarse.
+    /// </summary>
+    public static async Task<Dictionary<string, string>> DiscoverSsdpAsync(
+        CancellationToken ct = default)
+    {
+        var found = new Dictionary<string, string>();
+        Logger.Log($"[SSDP] Inicio descubrimiento {DateTime.Now:HH:mm:ss}");
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+
+            using var locator = new SsdpDeviceLocator();
+
+            // M-SEARCH: todos los dispositivos UPnP
+            var results = await locator.SearchAsync(); // timeout por defecto
+
+            foreach (var dev in results)
+            {
+                // IP del dispositivo: la del servidor de la descripcion
+                string? ipStr = dev.DescriptionLocation?.Host;
+                if (string.IsNullOrWhiteSpace(ipStr)) continue;
+
+                // Recuperar el documento de descripcion para el nombre amigable
+                string name = "Dispositivo UPnP";
+                try
+                {
+                    var device = await dev.GetDeviceInfo();
+                    if (!string.IsNullOrWhiteSpace(device.FriendlyName))
+                        name = device.FriendlyName;
+                    else if (!string.IsNullOrWhiteSpace(device.Manufacturer))
+                        name = device.Manufacturer;
+                }
+                catch { /* dispositivo que no responde a la descripcion: dejar nombre generico */ }
+
+                if (!found.ContainsKey(ipStr)) found[ipStr] = name;
+            }
+            Logger.Log($"[SSDP] {found.Count} dispositivo(s) UPnP detectado(s)");
+            foreach (var kv in found)
+                Logger.Log($"[SSDP] {kv.Key} -> {kv.Value}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"[SSDP] ERROR: {ex.GetType().Name}: {ex.Message}");
+        }
+        if (found.Count == 0)
+            Logger.Log("[SSDP] Sin resultados; causa probable: multicast 239.255.255.250 "
+                + "bloqueado por el router/ firewall, o no hay dispositivos UPnP.");
+        Logger.Log($"[SSDP] Fin {DateTime.Now:HH:mm:ss} -> {found.Count}");
+        return found;
+    }
+
+    // ---------- Diagnostico: firewall de Windows ----------
+
+    /// <summary>
+    /// Ejecuta "netsh advfirewall show allprofiles" y reporta en el log si los
+    /// perfiles de firewall estan activos (bloquearian multicast UDP 5353/1900).
+    /// Tambien lista reglas que podrian bloquear mDNS/SSDP.
+    /// </summary>
+    private static void LogFirewallStatus()
+    {
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(
+                "netsh", "advfirewall show allprofiles")
+            {
+                RedirectStandardOutput = true, UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = System.Diagnostics.Process.Start(psi)!;
+            string output = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit(3000);
+
+            // Extraer el estado de cada perfil (Activo/Inactivo)
+            foreach (var line in output.Split('\n'))
+            {
+                var t = line.Trim();
+                if (t.StartsWith("Perfil", StringComparison.OrdinalIgnoreCase)
+                    || t.StartsWith("Profile", StringComparison.OrdinalIgnoreCase))
+                    Logger.Log("[Firewall] " + t);
+            }
+            Logger.Log("[Firewall] Si algun perfil esta 'Activo/On', puede bloquear "
+                + "multicast UDP 5353 (mDNS) y 1900 (SSDP). Regla rapida de prueba: "
+                + "'netsh advfirewall firewall add rule name=\"mDNS-SSDP\" dir=in "
+                + "action=allow protocol=UDP localport=5353,1900 profile=any'.");
+        }
+        catch (Exception ex) { Logger.Log($"[Firewall] ERROR: {ex.Message}"); }
     }
 
     // ---------- Metodos base (tabla ARP, DNS inverso, IP local) ----------
